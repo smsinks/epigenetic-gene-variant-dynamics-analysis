@@ -1,0 +1,29 @@
+File,Description
+epigeneticsGenes.xlsx,"Contains a list of epigenetic genes, including gene symbols, names, and classes."
+mQTL.txt,Contains data on methylation quantitative trait loci (mQTLs).
+imputed_snp_freq.csv,Contains processed SNP frequencies for epigenetic genes.
+mart_export.txt,"Contains data exported from the Ensembl BioMart tool, including gene annotations or variant information."
+genetic_map_GRCh37.txt,"Contains the genetic map for the GRCh37 human genome assembly, used for mapping SNPs to genomic locations."
+variant_qc_metrics.txt,Contains quality control metrics for UKB biobank genetic variants.
+ukb_traits_epigenetic.txt,Contains trait data from the UK Biobank related to epigenetic variants.
+snps_func_impact.csv,"Contains the functional impact of SNPs, including predictions or annotations."
+epigenetics_LD_data.txt,Contains linkage disequilibrium data for epigenetic SNPs.
+clean_manifest.txt,"Contains a clean version of a manifest file from the UK Biobank, listing all samples or variants included in the study."
+GWAScat Small PICS2 2021-09-24.txt,"Contains data from the GWAS catalog, including associations of variants with traits."
+Pan-UK Biobank phenotype manifest 2.xlsx,Contains a manifest of phenotypes from the Pan-UK Biobank study.
+local_hQTLs.tab.txt,Contains local histone QTLs (hQTLs) data.
+snpFreq_diff_fisher_results.csv,Contains results of Fisher's exact test for differences in SNP frequencies.
+epigenetic_sQTL.txt,Contains data on splice QTLs (sQTLs) for epigenetic genes.
+snpWithEqtlsPvalues.xlsx,Contains SNP data with eQTLs and their associated p-values.
+variantqc_epi.txt,Contains variant quality control data specific to epigenetic genes.
+UKB_SNP_Comparisons_Less.csv,Contains SNP frequency comparisons between different populations.
+JEME.txt,"Contains data from the JEME (Joint Effect on Multiple Elements) tool, related to regulatory elements such as enhancers."
+mart_export_with_TSS_ALL_GENES.txt,Contains data exported from BioMart including transcription start sites (TSS) for all genes.
+h3africa_annot_v0.0.1_epi_genes.norm_snpeff.tsv,Contains annotation data from the H3Africa project for epigenetic genes and SNP Frequencies.
+all.v6.african-ancestry-only.meta.extended.pops.tsv,"Contains population data for African ancestry, including extended metadata."
+gwasCatalogue.tsv,Contains trait and phenotype association data from the GWAS catalog.
+require_files/GTEx_Analysis_v8_eQTL,Directory containing GTEx Analysis version 8 eQTL data.
+Manhattan Filter QTLs.csv,Contains filtered Manhattan plot data for QTLs.
+highConf_snpFreq.txt,Contains high-confidence SNP frequencies from the UK Biobank.
+Manhattan Filter Checking.csv,Contains additional filtered data for checking Manhattan plots.
+Intergrated Epigenetic Data.xlsx,"Contains integrated data on epigenetics, including SNPs, QTLs, and annotations."
