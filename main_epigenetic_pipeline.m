@@ -4230,9 +4230,810 @@ snp_eqtls_disease = innerjoin( snp_eqtls_disease, ...
 snp_eqtls_disease = removevars(snp_eqtls_disease, ...
     {'OddRatio','SigCount'}) ;
 
-%% Internal Functions
+%% ***************** Analysis of UK Biobank Traits **********************
+% ***********************************************************************
+% ***********************************************************************
+% ***********************************************************************
 
-% ******************** another internal function ************************
+% this is the analysis pipeline to evaluate the QTLs and variants
+% associated with variable biomarker and diseases in the UKB between AFR
+% and EUR individuals
+clc; clear; close all force %for a clean slate since all the analysis is done
+
+%% ***************** Analyse the traits datasets ***********************
+
+% load the data of the UK traits
+if ~exist('ukb_traits_final.xlsx','file')
+
+    % process the data 
+    data = readtable('ukb_traits_epigenetic.txt','Format','auto') ;
+    size(data)
+
+    % return only the biomarkers
+    data = data(data.UKB_trait_type == "biomarkers", :) ;
+
+    % load the integrated datasets of the variants
+    intData = readtable('Intergrated Epigenetic Data.xlsx');
+    intData = unique( intData(:,{'Variant','freqDiv','freqDiff'}) ) ;
+
+    % merge the two datasets
+    data = inner(data, intData) ;
+    size(data)
+
+    % load the gwas traits and add that to the data  and remove the odd
+    % gwas disease which is all NaN
+    gwasTrait = readtable(...
+        'GWAS Diseases.xlsx','Sheet','all_epigenetic_traits')  ;
+    gwasTrait = unique( gwasTrait(:,{'Variant','DISEASE_TRAIT','LINK'})) ;
+    gwasTrait = innerjoin( data, gwasTrait) ;
+    data.gwasDisease = [] ;
+    size(data)
+
+    % create a new variable that compares the two
+    data.freqDivProper = data.freqDiv ;
+    data.freqDivProper(data.freqDivProper < 1) =  ...
+        1./data.freqDiv(data.freqDivProper < 1) ;
+
+    % save the results 
+    writetable(data,'ukb_traits_final.xlsx')
+    writetable(gwasTrait,'ukb_traits_final.xlsx','Sheet','GWAS catalog')
+    
+    clear intData
+end
+
+% read the results 
+data = readtable('ukb_traits_final.xlsx','Format','auto');
+gwasTrait = readtable('ukb_traits_final.xlsx','Sheet','GWAS catalog');
+
+% read the high confidence snps freq data 
+highConf_snpFreq = readtable('highConf_snpFreq.txt') ;
+
+% return only the high confidence high frequence variants 
+data = data( ismember( data.Variant, highConf_snpFreq.Variant), :);
+gwasTrait = gwasTrait( ismember( ...
+    gwasTrait.Variant, highConf_snpFreq.Variant), :);
+
+% save the of the high confidernce variants results
+writetable(data,'ukb_traits_final_highConf.xlsx')
+writetable(gwasTrait,'ukb_traits_final_highConf.xlsx', ...
+    'Sheet','GWAS catalog')
+
+% correct the pvalue and the sig group
+data.gwasSigGroup(data.gwasSigGroup == "Both" ...
+    & isnan(data.pval_AFR) ) = {'EUR'} ;
+data.gwasSigGroup(data.gwasSigGroup == "Both" ...
+    & isnan(data.pval_EUR) ) = {'AFR'} ;
+
+% convert the QTLs to categorical data
+if ~islogical(data.eqtl)
+    data.eqtl = ismember(data.eqtl,'true') ;
+    data.sqtl = ismember(data.sqtl,'true') ;
+    data.hqtl = ismember(data.hqtl,'true') ;
+    data.mqtl = ismember(data.mqtl,'true') ;
+end
+
+data.highGroup = categorical(data.highGroup) ;
+data.gwasSigGroup = categorical(data.gwasSigGroup) ;
+data.UKB_description = categorical(data.UKB_description);
+
+% sort the rows 
+data = sortrows(data, 'freqDiv' , 'descend') ;
+gwasTrait = sortrows(gwasTrait,'freqDiv','descend') ;
+
+% here are the results for Africans
+afr = data(data.gwasSigGroup == "AFR" ,:) ;
+eur = data(data.gwasSigGroup == "EUR" ,:) ;
+both = data(data.gwasSigGroup == "Both",:) ;
+
+fprintf('\n AFR: %d snps associated with %d traits \n', ...
+    length(unique(afr.Variant)) , height(afr))
+fprintf('\n EUR: %d snps associated with %d traits \n', ...
+    length(unique(eur.Variant)) , height(eur))
+fprintf('\n BOTH: %d snps associated with %d traits \n', ...
+    length(unique(both.Variant)) , height(both))
+
+% save the results to the sumplementary data 
+writetable(data,'Supplementary Data 2.xlsx')
+
+clear highConf_snpFreq
+
+%% Let see associations with particular genes 
+
+mygene = data( ismember( data.HugoSymbol, 'ATAD2B'), :) ; % ATAD2B
+fprintf('\nThe number of all trait associtions is %d\n', height(mygene))
+fprintf('\nThe unique variants are %d\n',length(unique(mygene.Variant)) )
+fprintf('\nUnique traits is %d\n', length(unique(mygene.UKB_description)) )
+
+[~, uniqueLoc] = unique(mygene.Variant);
+mygene = mygene(uniqueLoc,:) ;
+
+fprintf('\nthe QTL distribution is:\n')
+summary(categorical(mygene.QTL))
+
+
+%% Annotate the QTLs in the data
+
+% here are the eQTL names
+QTLs = {'eqtl','mqtl','sqtl','hqtl'} ;
+
+% preallocate the table and the variable names 
+theQTLnames = {'eQTLs';'mQTLs';'sQTLs';'hQTLs';'multi-QTLs'} ;
+
+% create a variable
+data.QTL = repmat({'None'}, height(data),1) ;
+
+% a new variable to the tablle
+for ii = 1:length(theQTLnames)
+    % for values less than 5
+    if ii < 5
+        data.QTL(data.(QTLs{ii}) == true) = theQTLnames(ii) ;
+    else
+        % get the multiple instances
+        locMultiples = sum( data{:, {'eqtl','mqtl','sqtl','hqtl'}},2 ) > 1;
+        data.QTL(locMultiples) = theQTLnames(ii) ;
+    end
+end
+
+% plot a bar graph
+clear theQTLnames QTLs ii
+
+%% Create the data for snps signficant in each groups
+
+% the the sig groups and create an empty table for the groups
+theSigGroups = categories(data.gwasSigGroup) ;
+
+for ii = 1:length(theSigGroups)
+
+    % get only the unique variants for the significant groups
+    curData = data(data.gwasSigGroup == theSigGroups{ii}, ...
+        {'Variant','highGroup'}) ;
+    curData = unique(curData) ;
+    
+    % count the categories
+    curData = table( categories(curData.highGroup), ...
+        countcats(curData.highGroup) ,'VariableNames', ...
+        {'highGroup',theSigGroups{ii}} ) ;
+
+    % put the data in the table
+    if ii == 1
+        theSigNumber = curData;
+    else
+        theSigNumber = join( theSigNumber, curData );
+    end
+end
+
+clear ii curData theSigGroups
+
+%% Plot a figure for the number of variants that we indentified
+
+% get the total snps  and sort the total 
+totalSnps = table( categories(data.UKB_description), ...
+    countcats( data.UKB_description) ,'VariableNames', ...
+    {'UK_description','sigSnps'}) ;
+totalSnps = sortrows(totalSnps,'sigSnps','descend') ;
+
+% convert to categorical for plotting 
+totalSnps.UK_description = categorical(totalSnps.UK_description, ...
+    totalSnps.UK_description) ;
+
+fprintf('\nThe total number of SNPs is %d\n', sum(totalSnps.sigSnps))
+
+% here si the figure 
+figure()
+bar( totalSnps.UK_description, totalSnps.sigSnps)
+set(gca,'FontSize',12,'LineWidth',1,'FontSize',12 ,'Box','off')
+
+% edit the plot features
+ylabel('# of Variants')
+xlabel('Biomarker Measure')
+
+%% Let How how many eQTL are on in the Manhattan plot 
+
+% here are the QTLs
+smarc4 = readtable('Manhattan Filter QTLs.csv') ; 
+
+% get the significant varaiant 
+smarc4 = smarc4( smarc4.NegAFRGWASP_value  >  7.3010 | ...
+    smarc4.NegEURGWASP_value >  7.3010, : ) ;
+
+summary(categorical(smarc4.QTL))
+
+fprintf('\n SMARC4 has %d association with %d traits\n', ...
+    height(smarc4), length(unique(smarc4.UKBDescription)))
+
+smarc4 = unique( smarc4(:,{'Variant','QTL'}) ) ;
+summary(categorical(smarc4.QTL))
+
+%% Here are the variants for ATAD2
+
+atad2b = readtable('Manhattan Filter Checking.csv');
+% get the significant varaiant 
+atad2b = atad2b( atad2b.NegAFRGWASP_value  >  7.3010 | ...
+    atad2b.NegEURGWASP_value >  7.3010, : ) ;
+
+summary(categorical(atad2b.QTL))
+
+fprintf('\n ATAD2A has %d association with %d traits\n', ...
+    height(atad2b), length(unique(atad2b.UKBDescription)))
+
+atad2b = unique( atad2b(:,{'Variant','QTL'}) ) ;
+summary(categorical(atad2b.QTL))
+
+%% Create a disease network for the traits associated with the variants
+
+% get the graph data 
+gwasGraph = gwasTrait(:,{'UKB_description','DISEASE_TRAIT'} );
+gwasGraph.UKB_description = lower(gwasGraph.UKB_description) ;
+gwasGraph.DISEASE_TRAIT = lower(gwasGraph.DISEASE_TRAIT);
+gwasGraph.ogTrait = gwasGraph.DISEASE_TRAIT;
+
+% replace some variaable 
+gwasGraph.DISEASE_TRAIT = replace( gwasGraph.DISEASE_TRAIT, ...
+    {'low density lipoprotein cholesterol levels',...
+    'high density lipoprotein cholesterol levels', ...
+    'insulin-like growth factor 1'} , ...
+    {'ldl cholesterol','hdl cholesterol','igf-1'} );
+
+% remove the rows that have mtag 
+gwasGraph( contains( gwasGraph.DISEASE_TRAIT, ...
+    {'mtag','medication use'}), :) = [];
+
+% remove levels, count, high and low with ''
+gwasGraph.DISEASE_TRAIT = strtrim( replace(gwasGraph.DISEASE_TRAIT, ...
+    {'levels','count','high','low','percentage of white cells', ...
+    'percentage of granulocytes','percentage of myeloid white cells', ...
+    'x fish oil supplementation interaction (2df)','serum',...
+    'est math class taken ()' ,'liver enzyme  (','()','level',...
+    'rate of cognitive decline in ','fraction of red cells',...
+    'fraction of red cells','percentage of red cells',...
+    'volume','total','mtag', '(pleiotropy)',...
+    '(bmi interaction)','(liver)',' (basophil)',...
+    '(ever regular vs never regular)' ,'(endometrioid histology)',...
+    ' x fish oil supplementation interaction (2df)',...
+    '(joint analysis for main effect and physical activity interaction)',...
+    '(ever regular vs never regular) ()','(television watching)',...
+    'in active individuals',' (broad)',' (age of onset)',...
+    '(ordinary least squares (ols))','(years of education)',...
+    '(arm fat )','(leg fat )','(trunk fat )',' (age at onset)',...
+    'mean','time','adjusted','ratio'}, '') ) ;
+
+gwasGraph.DISEASE_TRAIT = replace( gwasGraph.DISEASE_TRAIT, ...
+    {'sex hormone-binding globulin','eosinophil s',' in smokers' ...
+    ' ()','lymphocyte s','sum eosinophil basophil s', ...
+    'glycated hemoglobin', ...
+    'glomerular filtn rate (creatinine)'} , ...
+    {'shbg','eosinophil','','','lymphocyte','eosinophil', ...
+    'glycated haemoglobin','creatinine'} );
+
+gwasGraph.DISEASE_TRAIT = replace( gwasGraph.DISEASE_TRAIT, ...
+    {' x long  sleep  interaction (2df test)',' (pathological)' ...
+    'x short  sleep  interaction (2df test)',...
+    ', mortality and associated endophenotypes' },{'','','',''}) ;
+gwasGraph.DISEASE_TRAIT = strtrim(gwasGraph.DISEASE_TRAIT) ;
+
+gwasGraph.UKB_description = replace( gwasGraph.UKB_description, ...
+    'glycated haemoglobin (hba1c)','glycated haemoglobin');
+gwasGraph.UKB_description = replace( gwasGraph.UKB_description, ...
+    'glycated haemoglobin (hba1c)','glycated haemoglobin');
+
+% add the node size and weight to the graph table 
+
+% this is in related to the GWAS catalog to to what we find in our data 
+G = graph(gwasGraph.UKB_description, gwasGraph.DISEASE_TRAIT, ...
+    'omitselfloops')
+plot(G)
+
+%% Create a network of UKB traits only 
+
+% get the traits
+if ~iscategorical(data.UKB_description)
+    data.UKB_description = categorical(data.UKB_description);
+end
+ukb_desc = categories(data.UKB_description) ;
+
+% here the empty table for the traits
+traitGraph = table('Size',[0,3], ...
+    'VariableNames',{'Biomarker1','Biomarker2','Common'},...
+    'VariableType',{'cell','cell','double'} ) ;
+
+% loop over the trait twice
+for ii = 1:length(ukb_desc)
+
+    % print something to the screen
+    fprintf('\n Running analysis for biomarker #%d : %s\n', ...
+        ii, ukb_desc{ii})
+
+    % here is the temp trait
+    tempGraph = array2table( repmat(ukb_desc(ii),length(ukb_desc),1), ...
+        'VariableNames',"Biomarker1" );
+
+    for jj = 1:length(ukb_desc)
+
+        % get the tratis that are shared 
+        curData = data(data.UKB_description == ukb_desc{ii} | ...
+            data.UKB_description == ukb_desc{jj}, ...
+            {'Variant','UKB_description'}) ;
+
+        % get the unique rows 
+        curData = unique(curData) ;
+
+        % count the number of instances that appear more than once
+        curData = sum( countcats(categorical(curData.Variant)) > 1) ;
+        
+        % add a new variable to the table 
+        tempGraph.Biomarker2(jj) = ukb_desc(jj) ;
+        tempGraph.Common(jj) = curData ;
+    end
+
+    % concatinate the tables 
+    traitGraph  = [traitGraph ; tempGraph] ;
+end
+
+% removet the rows with the same name 
+traitGraph(strcmp(traitGraph.Biomarker1,traitGraph.Biomarker2),:) = [];
+
+% remove the duplicate rows
+size(traitGraph)
+for ii = 1:2:height(traitGraph)
+    biomarker1 = traitGraph.Biomarker1(ii) ;
+    biomarker2 = traitGraph.Biomarker2(ii) ;
+    traitGraph.Biomarker1(ii) = biomarker2;
+    traitGraph.Biomarker2(ii) = biomarker1 ;
+end
+traitGraph = unique(traitGraph);
+size(traitGraph)
+
+% sort the rows 
+traitGraph = sortrows(traitGraph,'Common','descend') ;
+
+% this is in related to the GWAS catalog to to what we find in our data 
+G2 = graph(traitGraph.Biomarker1, traitGraph.Biomarker2,'omitselfloops');
+plot(G2)
+set(gca,'Box','off','Visible','off')
+
+% save the file so I can plot the next in yEd
+writetable(traitGraph,'biomarker network yED.xlsx')
+writetable(traitGraph,'Supplementary Data 3.xlsx')
+
+clear tempGraph ii jj curData ukb_desc
+
+%% Clustering of variants in Epigenetic genes 
+
+% get the unique variants and the unique phenotypes 
+clustData = array2table(unique(data.Variant),'VariableNames',{'Variant'}) ;
+phenotypes = categories( data.UKB_description) ;
+
+% loop over the phenotype
+for ii = 1:length(phenotypes)
+    % get the rows of the data with the current phenotype
+    curData = data(data.UKB_description == phenotypes{ii} ,{'Variant'}) ;
+
+    % add true ot all the second column of the table 
+    curData.(phenotypes{ii}) = true(height(curData),1) ;
+
+    % add to the growing table 
+    clustData = outerjoin(clustData,curData,'Key','Variant', ...
+        'MergeKey',true) ;
+end
+
+% add false to every row that does not have data and convert the values to
+% double 
+for ii = 2:width(clustData)
+    clustData.(ii)(ismissing(clustData.(ii))) = false ;
+     clustData.(ii) = double( clustData.(ii) ) ;
+end
+
+% change some variablenames so they can be seen on the clustergram 
+clustData.Properties.VariableNames = replace( ...
+    clustData.Properties.VariableNames, ...
+    {'Glycated haemoglobin (HbA1c)','Gamma glutamyltransferase'...
+    'Aspartate aminotransferase','Alanine aminotransferase',...
+    'Alkaline phosphatase'}, {'HbA1c','GGT','AST','ALT','ALP'} ) ;
+
+% here is the clustergraph
+clustergram( clustData{:,2:end},'rowlabels', clustData.Variant,...
+    'columnlabels', clustData.Properties.VariableNames(2:end),...
+    'colormap', redbluecmap ,'standardize','none',...
+    'ColumnPDist','euclidean','Linkage','complete');
+
+clear curData ii phenotypes
+
+%% Let plot some more figures
+
+% plot the bar graphs using a tiled layout
+figure()
+set(gcf,'position',[500,500,1000,700]);
+tiledlayout(3,3,'TileSpacing','loose'); % ,'padding','compact'
+theLetters = 'a':'j';
+
+nexttile([1,3])
+% here are the scatter plot for non significant, significant in EUR and
+% significant in both groups 
+scatter(log10(data.freqDiv),-log10(data.pval_EUR), 30,'filled', ...
+    'MarkerFaceColor',[0.50,0.50,0.50])
+hold on 
+scatter(log10(eur.freqDiv),-log10(eur.pval_EUR), 30,'filled', ...
+    'MarkerFaceColor',[0.85,0.33,0.10])
+scatter(log10(both.freqDiv),-log10(both.pval_EUR), 30,'filled', ...
+    'MarkerFaceColor',[0.00,0.45,0.74])
+
+% edit the plot features
+ylabel('-log EUR p-value')
+xlabel('log (AF AFR/AF EUR)')
+set(gca,'FontSize',12,'LineWidth',1,'FontSize',12 ,'Box','off',...
+    'FontWeight','bold')
+
+% here is the legend 
+lgd = legend({'No','EUR Only','Both'},'Location','NorthWest', ...
+    'Box','off');
+title(lgd,'GWAS Significance')
+
+% add a letter to the figure and remove the letter from the array
+text(-0.07, 1 ,theLetters(1),'Units','normalized','FontWeight','bold', ...
+    'FontSize',28)
+
+hold off
+
+nextLim = get(gca,'XLim') ;
+
+nexttile([1,3])
+% here are the scatter plot for non significant, significant in AFR and
+% significant in both groups 
+scatter(log10(data.freqDiv),-log10(data.pval_AFR), 30,'filled', ...
+    'MarkerFaceColor',[0.50,0.50,0.50])
+hold on 
+scatter(log10(afr.freqDiv),-log10(afr.pval_AFR), 30,'filled', ...
+    'MarkerFaceColor', [0.47,0.67,0.19])
+scatter(log10(both.freqDiv),-log10(both.pval_AFR), 30,'filled', ...
+    'MarkerFaceColor',[0.00,0.45,0.74])
+
+% edit the plot features
+ylabel('-log AFR p-value')
+xlabel('log (AF AFR/AF EUR)')
+set(gca,'FontSize',12,'LineWidth',1,'FontSize',12 ,'Box','off',...
+    'FontWeight','bold','XLim',nextLim)
+
+% here is the legend 
+lgd = legend({'No','AFR Only','Both'},'Location','NorthWest', ...
+    'Box','off');
+title(lgd,'GWAS Significance')
+
+% add a letter to the figure and remove the letter from the array
+text(-0.07, 1 ,theLetters(2),'Units','normalized','FontWeight','bold', ...
+    'FontSize',28)
+hold off
+
+% add grouped bar graph to the plot
+groupColors = [ 0.47,0.67,0.19; 0.85,0.33,0.10; 0.50,0.50,0.50];
+
+% convert the number to percentage 
+plotData = theSigNumber{:,2:end} ;
+plotData = round(plotData./sum(plotData)*100,0) ;
+
+% transpose the table for plotting
+plotData = plotData' ;
+
+nexttile([1,2]);
+hold on
+bv = bar( categorical({'AFR','Both','EUR'}),plotData) ;
+
+% get the numbers 
+theNums = plotData(:);
+
+% change the color of the second bars graphs and add number to the bar
+% graphs -- 
+for ii = 1:numel(bv)
+
+    % change the colour
+    bv(ii).FaceColor = groupColors(ii,:);
+
+    % add the numbers 
+    xTips = bv(ii).XEndPoints; yTips = bv(ii).YEndPoints;
+
+    % loop over the xvalues
+    % *************************** SUPER VECTORISED ***********************
+    text( xTips, yTips, strcat( string(yTips),'%'), 'vert', ...
+        'bottom','horiz','center');
+    % ********************************************************************
+end
+
+% add a legend
+lgd = legend({'AFR','EUR','None'},'Location','NorthEast','Box','off');
+title(lgd,'Sig. frequent in')
+
+% edit the plot features
+ylabel('% of total variants')
+xlabel('GWAS Significance Population')
+set(gca,'FontSize',12,'LineWidth',1,'FontSize',12 ,'Box','off',...
+    'FontWeight','bold')
+
+% add a letter to the figure and remove the letter from the array
+text(-0.11, 1 ,theLetters(3),'Units','normalized','FontWeight','bold', ...
+    'FontSize',28)
+hold off
+
+% add the venn diagram of the signficant variants between groups
+% that are intersecting
+nexttile([1,1]);
+venn([200,200],75,'EdgeColor','black')
+hold on
+
+% add text to the figure: get numbers of intersects to add to the plots
+myNumText(3) = height(afr) ;
+myNumText(2) = height(both);
+myNumText(1) = height(eur) ;
+
+fprintf('\nThe total number of signficant variants is %d\n', height(data))
+fprintf('\n# of AFR only sig variants is %d\n', height(afr))
+fprintf('\n# of EUR only sig variants is %d\n', height(eur))
+fprintf('\n# of both groups sig variants is %d\n', height(both))
+
+fprintf('\nDistrubtion of AFR only sig variants\n')
+summary(afr.highGroup)
+fprintf('\nDistrubtion of EUR only sig variants\n')
+summary(eur.highGroup)
+fprintf('\nDistrubtion of Both grups only sig variants\n')
+summary(both.highGroup)
+
+% here are text positions and the titles of the plots
+textPos = [0.25, 0.47 , 0.70] ;
+for jj = 1:length(textPos)
+    text(textPos(jj),0.5,num2str(myNumText(jj)),'Units','normalized',...
+        'FontWeight','bold','FontSize',12,...
+        'HorizontalAlignment','center')
+end
+
+% add the titles to the circle
+myGroups = {'EUR','AFR'};
+textPos = [0.33 , 0.66] ;
+for jj = 1:length(textPos)
+    text(textPos(jj), 0.98 ,[myGroups{jj}],'Units','normalized', ...
+        'FontWeight','bold','FontSize',12,...
+        'HorizontalAlignment','center')
+end
+
+% add a letter to the figure and remove the letter from the array
+text(-0.05, 1, theLetters(4),'Units','normalized','FontWeight','bold', ...
+    'FontSize',28)
+hold off
+
+clear textPos jj myGroups myNumText theLetters nextLim
+
+% % here is the bar graph for the qtls
+% figure()
+% bar( sum(data{:,{'eqtl','mqtl','hqtl','sqtl'}} ) ) 
+
+% write the results to a table 
+writetable(data, 'ukb_trait_highConf_variants.txt')
+
+%% Find the variants associated with traits in AFR that are in LD w/ EUR 
+
+% find those variants 
+ldData = readtable('epigenetics_LD_data.txt');
+
+% AFR common LD 
+afr_ld_snps = [] ;
+
+for ii = 1:height(afr)
+
+    % get the variant in AFR 
+    curVariant = afr.Variant{ii} ;
+
+    % get the ld data of the current variants 
+    curLD = ldData( ismember(ldData.IndexSNP,curVariant) | ...
+        ismember(ldData.LinkedSNP,curVariant), :) ;
+
+    % get the european data for the same for the current trait 
+    curEURtraits = eur(eur.UKB_description == afr.UKB_description(ii), :);
+
+    % find the snps that are in LD
+    commonSNPs = curLD(  ismember(curLD.IndexSNP,curEURtraits.Variant) | ...
+        ismember(curLD.LinkedSNP,curEURtraits.Variant), :) ;
+
+    if isempty(curLD) || isempty(commonSNPs)
+        continue
+    end
+
+    % add those snps the overall table
+    tempAFR = repmat( afr(ii,:), height(commonSNPs), 1) ;
+    tempAFR = [ tempAFR, commonSNPs ] ;
+
+    % add to the all afr variables
+    afr_ld_snps = [afr_ld_snps; tempAFR] ;
+end
+
+%% Now produce some locus zoom data for variants are signficant in AFR
+
+% define the number of workers on the cluster
+% set up a pool of 20 cores
+if multiCoreHighMem == true
+    try
+        % work on the entire datasets
+        parpool('local',numOfCores)
+    catch
+    end
+else
+    % stop the processing
+    fprintf('\nThis  analysis requires a high memory computer\n')
+    return
+end
+
+% get only the traits for which their are signficant variants in AFR
+manifest = readtable('clean_manifest.txt') ;
+afr_manifest = manifest( ismember(manifest.description,...
+     afr.UKB_description), :) ;
+
+% load the variant qc data
+variantqc = readtable('variant_qc_metrics.txt') ;
+variantqc = variantqc(:,{'chrom','pos','ref','rsid'}) ;
+
+% make the directory
+if ~exist('locusZoomFiles','dir')
+    mkdir('locusZoomFiles')
+end
+
+% save the file for locus zoom
+parfor ii = 1:height(afr_manifest)
+
+    % get only the high quality variants
+
+    % print something to the screen
+    fprintf('\n Reading GWAS summary results for %s: # %d of %d\n',...
+        afr_manifest.description{ii}, ii, height(afr_manifest) )
+
+    % here is the current file names
+    curFileName = replace(afr_manifest.filename{ii},'.tsv.bgz','.txt') ;
+    curVarName = replace( afr_manifest.description{ii}, ' ','_') ;
+
+    % read the file
+    curResults = readtable(['epi_',curFileName]) ;
+
+    % add the variant from the matrix to the res tables with the new
+    % variable name being MarkerName
+    curResults = innerjoin(curResults, variantqc,...
+        "Keys",{'chrom','pos','ref','rsid'}) ;
+
+    % get a subset for EUR and AFR 
+    curResAFR = curResults(:, ...
+        {'chrom','pos','ref','alt','pval_AFR','rsid'});
+    curResEUR = curResults(:, ...
+        {'chrom','pos','ref','alt','pval_EUR','rsid'});
+
+    % change the variable names 
+    curResAFR.Properties.VariableNames = ...
+       {'CHR','POS','REF','ALT','P.value','MarkerName'} ;
+    curResEUR.Properties.VariableNames = ...
+       {'CHR','POS','REF','ALT','P.value','MarkerName'} ;
+
+    % save the file to a table
+    writetable(curResAFR, ['locusZoomFiles/', curVarName ,'-AFR.txt'], ...
+         'FileType','text','delimiter','tab')
+    writetable(curResEUR, ['locusZoomFiles/', curVarName ,'-EUR.txt'], ...
+        'FileType','text','delimiter','tab')
+    
+end
+
+%% Plot the Manhattan plot for all the variable 
+
+% here are the ukb traits 
+ukbTraits = [] ;
+
+% load the manifest
+if exist('manifest','var')
+    manifest = readtable('clean_manifest.txt') ;
+end
+
+% process the files % change this to a Parallel for Loop
+parfor ii = 1:height(manifest)
+
+    % get only the high quality variants
+
+    % print something to the screen
+    fprintf('\n Reading GWAS summary results for %s: # %d of %d\n',...
+        manifest.description{ii}, ii, height(manifest) )
+
+    % here is the current file names
+    curFileName = replace(manifest.filename{ii},'.tsv.bgz','.txt') ;
+    curVarName = manifest.description{ii} ;
+
+    % ******************************************************************
+    % ***** produce a manhattan plot the for the current variants ******
+    fprintf('\n Plotting the Manhattan plots for %s \n', curFileName)
+
+    % load the processed file of only epigentic genes
+    curResults = readtable(['epi_',curFileName]) ;
+
+    % here are the groups
+    theGroups = {'EUR','AFR'};
+    thePvalues = {'pval_EUR','pval_AFR'} ;
+
+    % here is the plot of the p-values
+    for kk = 1:length(theGroups)
+
+        % get the current ploting data
+        % names to those acceptabed by the funtion  [T.CHR,T.BP,T.P];
+        curPlotData = curResults(:,{'chrom','pos',thePvalues{kk}}) ;
+        curPlotData.Properties.VariableNames = ["CHR","BP","P"] ;
+
+        % plot the manhattan figures
+        ManhattanPlot(curPlotData,'title',[curVarName,' - ',theGroups{kk}])
+
+        % set the figure properties and add a title and remove the xlabel
+        set(gca,'FontSize',16,'LineWidth',1.5,'Box','off')
+        title([curVarName,' - ',theGroups{kk}],'FontSize',16,...
+            'FontWeight','bold','Units','normalized',...
+            'Position',[0.5, 0.92]);
+        xlabel('')
+
+        % change the figure properties
+        if strcmp(theGroups{kk},'AFR')
+            % reverse the figure axis if the plot is for AFR
+            set(gca,'FontSize',16,'LineWidth',1.5,'Box','off',...
+                'YDir','reverse','XAxisLocation','top','XTickLabel',[])
+
+            % add the title to the bottom of the plot
+            title([curVarName,' - ',theGroups{kk}],'FontSize',16,...
+                'FontWeight','bold','Units','normalized',...
+                'Position',[0.5, 0.08]);
+        end
+
+        % save the figure: adds _ManhattanPlot to filenames
+        name = [ theGroups{kk},'_', replace(curVarName,' ','_') ];
+
+        % set the paper properties
+        set(gcf,'paperunits','centimeters','paperposition',[0 0 60 10])
+        print(['manhattanPlots/',name,'.png'],'-dpng','-r300','-vector')
+    end
+
+    % ******************************************************************
+
+    % **** make a new table with all the variants that are significant *** 
+        
+    % get only the significant variants in the data
+    curResults = curResults( curResults.pval_EUR < 5e-8 | ...
+        curResults.pval_AFR < 5e-8, :) ;
+
+    % check that the file is not empty
+    if ~isempty(curResults)
+        continue
+    end
+
+    % add the variable name to the table also add the trait involved and if
+    % its a biomarker or no
+    curResults.UKB_trait_type = repmat( ...
+        manifest.trait_type(ii), height(curResults), 1);
+    curResults.UKB_description = repmat( manifest.description(ii), ...
+        height(curResults), 1);
+
+    % change the trait type to the coding description
+    if strcmp( manifest.trait_type(ii) ,'categorical')
+        curResults.UKB_description = repmat( ...
+            manifest.coding_description(ii), height(curResults),1) ;
+    end
+
+    % add the results to the final reults
+    ukbTraits = [ukbTraits; curResults] ;
+
+end
+
+% save the complete file of the gwas triats 
+writetable(ukbTraits,'ukb_traits_epigenetic_complete.txt')
+
+
+
+
+
+
+
+
+
+
+
+
+%% ********************* Internal Functions ****************************
+% **********************************************************************
+
+% ******************** internal function ************************
 % Helper function to get field value from structure with error checking
 function value = get_field(struct, field_name, default_value)
     if isfield(struct, field_name)
@@ -5813,3 +6614,440 @@ function pSuperScript = convertPValue2SuperScript(p)
     end
 
 end
+
+
+% *********************** END of Internal Function ********************
+
+% *********************************************************************
+
+% ======================= another function =========================
+
+% function for LD cross referecing when comparing variants
+function [allLd, transferTable, numOfLDsnps ] = ...
+    epigenetics_ld_crossref( ...
+    ldData, snpData, transferTable, rSquareCutOff , wndwSize)
+
+% the function has six (6) inputs
+% #1 LD table for UKB or 1000G
+% #2 snpData - are the results of a gwas study for causal snps
+% #3 transferTable - table in which we want to identify previously known
+% varinats e.g., the GWAS catalog table or eQTLs from GTEx
+% #4 allSnpsData - all the snps not only the causal variants
+% #5 rSquareCutOff - values for considering LD - e.g., 0.5
+% #6 window size - up or downstream the causal variant
+
+% get the current ld data and the curnspl data
+curLddata = ldData(ldData.Rsquare >= rSquareCutOff, :) ;
+allLd = [] ;
+numOfLDsnps = 0 ;
+seenVariants = {'Dummy'};
+
+% here are the data
+for ii = 1:height(snpData)
+    
+    % print something to the screen
+    if rem(ii,200) == 0
+        fprintf('\nrunning analysis for variant #%d of %d\n', ...
+            ii, height(snpData) )
+    end
+    
+    % get the current snp
+    curSnp = snpData.Variant(ii) ;
+    
+    % check if the variants has already been seen
+    if ~isempty(seenVariants)
+        if any( ismember(seenVariants,curSnp) )
+            continue
+        end
+    end
+    
+    % add the current variant to those we have already seen
+    seenVariants = unique( [seenVariants;curSnp] );
+    
+    % get the snps in close proximity with the current snp -- these are
+    % snps which are within 500KB of the lead snp that is predicted
+    % caused
+    catalogSnps = transferTable( ismember( transferTable.Position , ...
+        snpData.Position(ii)-wndwSize:snpData.Position(ii)+wndwSize) & ...
+        transferTable.Chrom == snpData.Chrom(ii) , : ) ;
+    
+    % remove the current snp from the table
+    catalogSnps(ismember(catalogSnps.Variant, curSnp), :) = [] ;
+    
+    % check if the table has data
+    if isempty(catalogSnps)
+        continue
+    end
+    
+    % *********** Do the analsis for the Index snp in the table **********
+    
+    % find if any of those snps are in LD with the lead snp AND ALL THE
+    % OTHER SNPS THAT ARE SIGNFICANT WITHIN A PARTICULAR REGION
+    nearCurSnp = snpData.Variant( ismember( snpData.Position , ...
+        snpData.Position(ii)-wndwSize:snpData.Position(ii)+wndwSize) & ...
+        snpData.Chrom == snpData.Chrom(ii) ) ;
+    
+    % remove the current snp from the table
+    nearCurSnp(ismember(nearCurSnp, curSnp), :) = [] ;
+    
+    % here are the snps were looking for that are signficant in the gwas
+    % and are also in strong LD
+    curLd = curLddata(ismember(curLddata.IndexSNP, nearCurSnp) | ...
+        ismember(curLddata.LinkedSNP, nearCurSnp) ,:);
+    
+    % find variant in the discovered snps that are Ld with the gwas
+    % catalogy variants
+    curLd = curLd(ismember( curLd.LinkedSNP, catalogSnps.Variant) | ...
+        ismember( curLd.IndexSNP, catalogSnps.Variant) , :) ;
+    
+    % get the uniques
+    curLd = unique(curLd) ;
+    
+    % check if the table has data
+    if isempty(curLd)
+        continue
+    end
+    
+    % create the current ld struct
+    allLd = [allLd ;curLd] ;
+    
+    % get the variants in ld
+    ldVariants = unique( [curLd.LinkedSNP ; curLd.IndexSNP] );
+    
+    % add the current variant to those we have already seen
+    seenVariants = unique( [seenVariants;ldVariants] );
+    
+    % get the location of those viariants
+    locVariants = ismember(transferTable.Variant, ldVariants);
+    
+    % if htose variats dont exist in the table skip that variant
+    if ~any(locVariants)
+        continue
+    end
+    
+    % print some thing the screen
+    numOfLDsnps = numOfLDsnps + sum(locVariants) - 1 ;
+    fprintf('\n The number of LD variant identified is %d\n',numOfLDsnps)
+    
+    % change those snps in the snpLd table
+    transferTable.Variant(locVariants) = curSnp ;
+    transferTable.Chrom(locVariants) = snpData.Chrom(ii);
+    transferTable.Position(locVariants) = snpData.Position(ii) ;
+    try
+        transferTable.Alternative(locVariants) = snpData.Alternative(ii);
+    catch
+    end
+    try
+        transferTable.Reference(locVariants) = snpData.Reference(ii);
+    catch
+    end
+    
+end
+end
+
+% *********************** END of Internal Function ********************
+
+% *********************************************************************
+
+% ========================== another function =========================
+
+function ManhattanPlot( filename, varargin )
+
+%   This function takes a GWAS output file  and plots a Manhattan Plot.
+
+% ******************** ARGUMENTS: ********************
+%   sex: defaults to 0, set to 1 to include sex chromosomes
+
+%   sig: defaults to 5e-8, significance threshold for horizontal line
+
+%   vert: defaults to 0, set to 1 for tick labels have chr in them and are
+%   written upwards
+
+%   labels: defaults to [-1,-1]. Set to [x,y] to label the top SNP on each
+%   locus with p<x. Locus defined by windows of y base pairs.
+
+%   outfile: defaults to filename of input file, set to something else to
+%   change name of output file
+
+%   title: defaults to 'Manhattan Plot'. Fairly self-explanatory
+
+%   save: defaults to 1, set to 0 to disable saving to save time
+
+%   format: defaults to PLINK, options {PLINK,BOLT-LMM,SAIGE} This is used
+%   to identify the correct column headings. If using anything else, rename
+%   the header line so that CHR, BP, and P are the headers for chromosome,
+%   base pair and p value, and the default PLINK should catch it
+
+% ******************** Usage: ********************
+%   ManhattanPlot('gwas.assoc.fisher',varargin) will take the association
+%   analysis in 'gwas.assoc.fisher, generate a Manhattan Plot, and store it
+%   in gwas_ManhattanPlot.png, which should be publication-ready, and
+%   gwas_ManhattanPlot.fig for minor readjustments in MATLAB's GUI. This is
+%   fine as .fisher is a PLINK format file. For a SAIGE output (and
+%   significance threshold 5e-9) with sex chromosomes shown, and the top
+%   hit for each SNP within 1 mb and below p=1e-6 labelled, use
+%   ManhattanPlot('gwas.saige','format','SAIGE','sig',5e-9,'sex',1,
+%   'labels',[1e-6,1000000])
+
+%   Tested using assoc, assoc.logistic and assoc.fisher files generated by
+%   Plink 1.7. Also tested using BOLT-LMM and SAIGE.
+%
+%   Harry Green (2019) Genetics of Complex Traits, University of Exeter
+
+% ********* Reading in optional arguments and input file ***************
+
+p = inputParser;
+defaultsex = 0;
+defaultvert = 0;
+defaultsig = 5e-8;
+defaultsave = 1;
+defaultoutfile = filename;
+defaulttitle= 'Manhattan Plot';
+defaultlabels = [-1, -1];
+defaultformat = 'PLINK';
+expectedformat = {'PLINK','BOLT-LMM','SAIGE'};
+
+addRequired(p,'filename');
+% addOptional(p,'outfile',defaultoutfile,@ischar);
+addOptional(p,'sex',defaultsex,@isnumeric);
+addOptional(p,'vert',defaultvert,@isnumeric);
+addOptional(p,'labels',defaultlabels,@isnumeric);
+addOptional(p,'sig',defaultsig,@isnumeric);
+addOptional(p,'save',defaultsave,@isnumeric);
+addParameter(p,'format',defaultformat,...
+    @(x) any(validatestring(x,expectedformat)));
+addParameter(p,'outfile',defaultoutfile,@ischar);
+addParameter(p,'title',defaulttitle,@ischar);
+
+parse(p,filename,varargin{:});
+
+filename=p.Results.filename;
+sex=p.Results.sex;
+vert=p.Results.vert;
+sig=p.Results.sig;
+save=p.Results.save;
+format=p.Results.format;
+outfile=p.Results.outfile;
+labels=p.Results.labels;
+plottitle=p.Results.title;
+
+% ################ Check if the input is a table for a file name #########
+
+if ischar(filename)
+    % MATLAB refuses to read file formats like .assoc, so first rename as
+    % .txt
+    copyfile(filename, strcat(filename,'.txt'));
+    opts = detectImportOptions(strcat(filename,'.txt'),'NumHeaderLines',0);
+    
+    % the columns of T will be the headers of the assoc file
+    T = readtable(strcat(filename,'.txt'),opts);
+    
+    %delete unwanted .txt file that we didn't want anyway
+    delete(strcat(filename,'.txt'))
+elseif istable(filename)
+    T = filename ;
+end
+
+% ******************** File format defintitions ********************
+
+% This section uses the default column headings from PLINK, BOLT-LMM and
+% SAIGE. Easy to modify for other software packages
+
+% check the CHR variable exist then change to PLINK format
+if ~ismember(T.Properties.VariableNames,'CHR')
+    T.Properties.VariableNames([1,2]) = {'CHR','BP'} ;
+end
+
+if strcmp(format,'PLINK')
+    % These are the only useful columns for a manhattan plot, chromosome,
+    % base pair, p value
+    tab2=[T.CHR,T.BP,T.P]; 
+end
+
+if strcmp(format,'BOLT-LMM')
+    % These are the only useful columns for a manhattan plot, chromosome,
+    % base pair, p value
+    tab2=[T.CHR,T.BP,T.P_BOLT_LMM]; 
+end
+
+if strcmp(format,'SAIGE')
+    % These are the only useful columns for a manhattan plot, chromosome,
+    % base pair, p value
+    tab2=[T.CHR,T.POS,T.p_value]; 
+end
+
+% ******************** produce the manhattan plot ********************
+
+if sex==0
+    tab2=tab2(tab2(:,1)<23,:); %remove chr23 if not wanting sex chromosomes
+end
+
+% variable to track base pairs, this helps the plotting function to know
+% where to start plotting the next chromosome
+bptrack=0; 
+tab2(tab2(:,3)==0,:)=[];
+for i=1:22+sex
+    hold on
+    %a scatterplot. On the x axis, the base pair number + bptrack, which
+    %starts at 0. On the y axis, - log 10 p
+    plot(tab2(tab2(:,1)==i,2)+max(bptrack),-log10(tab2(tab2(:,1)==i,3)),'.'); 
+    
+    %this updates bptrack by adding the highest base pair number of the
+    %chromosome. At the end, we should get the total number of base pairs
+    %in the human genome. All values of bptrack are stored in a vector.
+    %They're useful later
+    bptrack=[bptrack,max(bptrack)+max(max(tab2(tab2(:,1)==i,:)))]; 
+end
+
+%if strongest hit is 1e-60, plot window goes up to 1e-61
+ylimit=max(max(-log10(tab2(:,3)))+1); 
+ylimitmin=min(min(-log10(tab2(:,3)))); %and down to the highest p value.
+
+%genome wide significant line, uses the sig optional argument which
+%defaults to 5e-8
+plot([0,max(bptrack)],-log10([sig,sig]),'k--') 
+
+% ylabel('$-\log_{10}(p)$','Interpreter','latex')
+ylabel('-log_1_0(p)')
+xlim([0,max(bptrack)])
+%y axis will always go to the significance threshold/5 at least
+ylim([floor(ylimitmin),max(ylimit,-log10(sig/5))])
+
+%this calculates the moving average of bptrack and uses them as chromosome
+%label markers. This puts them in the middle of each chromosome.
+M=movmean(bptrack,2); 
+xticks(M(2:end));
+
+% ******************** Rotation section ********************
+% this section of the code changes the x axis label orientation.
+
+if vert ==0
+    xlabel('Chromosome')% ,'Interpreter','latex')
+    xticklabels( 1:23 );
+end
+if vert ==1
+    xtickangle(90)
+    xticklabels( {'chr1','chr2','chr3','chr4','chr5','chr6','chr7',...
+        'chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15',...
+        'chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrXY'});
+end
+
+% ******************** Annotation section ********************
+% this section of the code annotates the top SNP on each locus
+
+% Neither of these should be negative. Defaults to -1 -1
+if ~(labels(1)==-1||labels(2)==-1) 
+    labellim=labels(1);
+    labelprox=labels(2);
+    
+    %as nothing else will be used for labelling, the reduced table is
+    %easier to manage
+    tab3=tab2(tab2(:,3)<labellim,:); 
+    
+    %easier if they're in ascending order of p value;
+    [~,index]=sort(tab3(:,3));
+    tab3=tab3(index,:);
+    
+    %this becomes a list of SNPs that have been labelled. It starts with a
+    %dummy SNP to give the first SNP something to compare with. This will
+    %always fail so the first label always gets added
+    labelledsnps=[0,0,0]; 
+    
+    for i=1:size(tab3,1)
+        test=abs(tab3(i,:)-labelledsnps);
+        %if there are no snps on the same chromosome and within 1 MB
+        if sum(test(:,1)==0&test(:,2)<labelprox)==0 
+            
+            %this plots a square over the corresponding dot
+            plot(bptrack(tab3(i,1))+tab3(i,2),-log10(tab3(i,3)),'ks',...
+                'MarkerSize',10,'LineWidth',1) 
+            
+            %this puts together a strong of chrx:y
+            labels=strcat('chr',string(tab3(i,1)),':',...
+                string(bptrack(tab3(i,1))+tab3(i,2))); 
+            
+            %this plots the label above and to the left of the dot, shifted
+            %up by 0.05 to give some space
+            text(bptrack(tab3(i,1))+tab3(i,2),-log10(tab3(i,3))+0.05,...
+                char(labels),'VerticalAlignment','bottom',...
+                'HorizontalAlignment','left') %,'Interpreter','latex') 
+            labelledsnps=[labelledsnps;tab3(i,:)];
+        end
+    end
+end
+
+% ******************** finalising file ********************
+
+% takes the output file name up to the first decimal point
+% get the file name
+if istable(outfile)
+    outfile = plottitle ;
+end
+if iscell(outfile)
+    outfile = char(outfile);
+end
+saveName = extractBefore(outfile,'.'); 
+
+% my code 
+set(gca,'FontSize',12,'LineWidth',1)
+
+box on
+title(plottitle,'fontsize',14)
+% title(plottitle,'Interpreter','latex','fontsize',14)
+
+if save~=0
+    name=[saveName,'_ManhattanPlot.fig']; %adds _ManhattanPlot to filenames
+    savefig(name);
+    set(gcf, 'paperunits', 'centimeters', 'paperposition', [0 0 30 10])
+    print([saveName,'_ManhattanPlot.png'],'-dpng','-r300','-vector') % -r600
+end
+
+end
+
+% *********************** END of Internal Function ********************
+
+% *********************************************************************
+
+% ========================== another function =========================
+
+% replicate variants that are siginficant in one population in another
+function ldsnps = replicateVariant(theSnp, ldData, gwasStats)
+
+    % A “local replication” strategy is an LD-based approach to
+    % replication in a different ancestry. The process is, broadly: -
+    % For significant SNP 1 in population 1, pull down a list of all
+    % variants that are in LD with SNP 1 in population 1 -> linked set
+    % SNP 1
+    curLd = ldData( ismember(ldData.IndexSNP, theSnp) , :) ;
+
+    % Check each of the variants in linked set SNP 1 for an association
+    % in population 2 and remove the un required variables
+    ldsnps = innerjoin(gwasStats,curLd, ...
+        "LeftKeys","rsid","RightKeys",{'LinkedSNP'} ) ;
+    
+    % stop the program if there is not data 
+    if isempty(ldsnps)
+        return
+    end
+
+    % get teh unique rows
+    ldsnps = unique(ldsnps) ;
+    
+    % correct for multiple comparions and get the variants with a
+    % pvalue less than 0.05
+    try
+        ldsnps.P = mafdr(ldsnps.P ,'BHFDR',true) ;
+        
+        % sort the variants based on statistical signficance
+        ldsnps = sortrows(ldsnps,'P','ascend');
+    catch
+        ldsnps.p = mafdr(ldsnps.p ,'BHFDR',true) ;
+        
+        % sort the variants based on statistical signficance
+        ldsnps = sortrows(ldsnps,'p','ascend');
+    end
+end
+
+
+
+
